@@ -1,0 +1,199 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters" : {
+    "sshKey": {
+        "Type": "AWS::EC2::KeyPair::KeyName",
+        "Default": "octo-tge"
+    },
+    "instanceType": {
+        "Type": "String",
+        "Default": "t2.micro",
+        "AllowedValues": [
+          "t2.micro",
+          "t1.micro",
+          "t2.nano",
+          "t2.small",
+          "t2.medium"
+        ]
+    },
+    "imageName": {
+        "Type": "String",
+        "Default": "ami-8af8ffe9"
+    },
+    "droneSecret": {
+      "Type": "String",
+      "NoEcho": "true",
+      "Default": "CE_SECRET_EST_COMPLETEMENT_BIDON"
+    },
+    "droneGithubClient": {
+      "Type": "String",
+    },
+    "droneGithubSecret": {
+      "Type": "String",
+      "NoEcho": "true",
+    }
+  },
+  "Resources": {
+    "drone": {
+        "Type": "AWS::EC2::Instance",
+        "Metadata": {
+          "AWS::CloudFormation::Init" : {
+            "configSets": {
+              "InstallAndRun": [
+                "install",
+                "run"
+              ]
+            },
+            "install" : {
+              "packages" : {
+                "yum": {
+                  "docker": []
+                }
+              },
+              "files" : {
+                "/home/ec2-user/docker-compose.yml": {
+                  "source": "https://s3-ap-southeast-2.amazonaws.com/tge-drone/docker-compose.drone.yaml",
+                  "mode": "000644",
+                  "user": "ec2-user",
+                  "group": "ec2-user"
+                }
+              },
+              "services" : {
+                "docker" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true"
+                }
+              },
+              "commands" : {
+                "installDockerCompose": {
+                  "command": "/usr/local/bin/pip install docker-compose",
+
+                }
+              }
+            },
+            "run" : {
+              "commands" : {
+                "startDrone": {
+                  "command": "docker-compose up -d",
+                  "cwd": "/home/ec2-user",
+                  "env": {
+                    "DRONE_GITHUB_CLIENT": {
+                      "Ref": "droneGithubClient"
+                    },
+                    "DRONE_GITHUB_SECRET": {
+                      "Ref": "droneGithubSecret"
+                    },
+                    "DRONE_SECRET": {
+                      "Ref": "droneSecret"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "Properties": {
+            "KeyName": { "Ref": "sshKey" },
+            "ImageId": { "Ref": "imageName" },
+            "InstanceType": { "Ref": "instanceType" },
+            "SecurityGroupIds" : [
+              { "Ref": "DroneSecGroup" }
+            ],
+            "Tags": [
+                {
+                    "Key": "AutoStop",
+                    "Value": "true"
+                },
+                {
+                    "Key": "Name",
+                    "Value": "tge-drone"
+                }
+            ],
+            "UserData" : { "Fn::Base64" :
+              { "Fn::Join" : ["", [
+                  "#!/bin/bash -xe\n",
+                  "yum install -y aws-cfn-bootstrap\n",
+                  "easy_install pip\n",
+                  "# Install the files and packages from the metadata\n",
+                  "/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource drone ",
+                  "         --configsets InstallAndRun ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "/opt/aws/bin/cfn-signal -e $? ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource drone ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n"
+              ]]}
+            }
+        },
+        "CreationPolicy" : {
+          "ResourceSignal" : {
+            "Timeout" : "PT5M"
+          }
+        }
+    },
+    "DroneSecGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "enable ssh and http(s)",
+        "SecurityGroupIngress" : [
+          {
+            "IpProtocol": "tcp",
+            "ToPort": "22",
+            "FromPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "ToPort": "80",
+            "FromPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "ToPort": "443",
+            "FromPort": "443",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebsiteUrl": {
+      "Description": "Public URL",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "http://",
+            {
+              "Fn::GetAtt": [
+                "drone",
+                "PublicDnsName"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "sshSiteUrl": {
+      "Description": "Ssh URL",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "ssh ec2-user@",
+            {
+              "Fn::GetAtt": [
+                "drone",
+                "PublicDnsName"
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  }
+}
